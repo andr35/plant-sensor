@@ -1,8 +1,9 @@
 #define WIFI_SSID "wifi_name"         // Add wifi name
 #define WIFI_PASSWORD "wifi_password" // Add wifi passowrd
 
-#define ID "plant" // Add unique name for this sensor
-#define INTERVAL 5 // Add interval (e.g. 1 min)
+#define DEBUG 1               // Enable/disable debug log lines
+#define SENSOR_ID "plant"     // Add unique name for this sensor
+#define SAMPLE_INTERVAL_SEC 5 // Sample interval (i.e. the duration between ESP wake-ups)
 
 // Sensors
 #define SOIL_MOISTURE_PIN 3 // Analog pin where soil moisture sensor is connected
@@ -15,12 +16,12 @@
 #define AIR_MOISTURE_VAL 16000  // Value given by the soil moisture in the air (empirically calculated)
 #define WATER_MOISTURE_VAL 6780 // Value given by the soil moisture in the water (empirically calculated)
 
-// Prometheus client
-
-// Follow https://github.com/grafana/diy-iot#setting-up-and-using-grafana-cloud
-#define GC_PROM_URL "prometheus-prod-01-eu-west-0.grafana.net" // Url to Prometheus instance
-#define GC_PROM_PATH "/api/prom/push"                          // Path
-#define GC_PORT 443
-#define GC_PROM_USER "" // Username
-#define GC_PROM_PASS "" // API key
-#define GC_DEBUG 1      // Enable/disable log debug lines on serial
+// Loki client
+// Follow https://grafana.com/blog/2021/03/08/how-i-built-a-monitoring-system-for-my-avocado-plant-with-arduino-and-grafana-cloud/?src=email&cnt=trial-started&camp=grafana-cloud-trial
+#define GC_LOKI_URL "something.grafana.net"
+#define GC_LOKI_USER ""
+#define GC_LOKI_PASS ""
+// Graphite client
+#define GC_GRAPHITE_URL "something.grafana.net"
+#define GC_GRAPHITE_USER ""
+#define GC_GRAPHITE_PASS ""

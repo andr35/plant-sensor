@@ -1,41 +1,32 @@
 
+//
+// Based on the following source code:
+// https://grafana.com/blog/2021/03/08/how-i-built-a-monitoring-system-for-my-avocado-plant-with-arduino-and-grafana-cloud/?src=email&cnt=trial-started&camp=grafana-cloud-trial
+// https://github.com/ivanahuckova/avocado_monitoring
+//
+
 #include <Arduino.h>
 #include <ESP8266WiFi.h>
+#include <ESP8266HTTPClient.h>
+#include <WiFiUdp.h>
+#include <NTPClient.h>
 #include <SPI.h>
 #include <uFire_SHT20.h>
 #include <Adafruit_ADS1X15.h>
-#include <ArduinoECCX08.h>
 
-#define PromLokiTransport_H
-// #include <PromLokiTransport.h>
-// ----
-#include "clients/ESP8266Client.h"
-typedef ESP8266Client PromLokiTransport;
-// ----
-
-#include <PrometheusArduino.h>
-
-#include "certificates.h"
 #include "config.h"
+
+// NTP Client
+WiFiUDP ntpUDP;
+NTPClient ntpClient(ntpUDP);
 
 // Sensors
 uFire_SHT20 sht20;
 Adafruit_ADS1115 ads;
 
-// Prometheus client and transport
-PromLokiTransport transport;
-PromClient client(transport);
-
-// Create a write request for 6 series
-WriteRequest req(6, 2048);
-
-// Define a TimeSeries which can hold up to 5 samples
-TimeSeries ts1(1, "temperature_celsius", "{subject=\"air\"}");
-TimeSeries ts2(1, "humidity_percent", "{subject=\"air\"}");
-TimeSeries ts3(1, "dew_point", "{subject=\"air\"}");
-TimeSeries ts4(1, "soil_moisture", "{subject=\"soil\"}");
-TimeSeries ts5(1, "battery_volts", "{subject=\"battery\"}");
-TimeSeries ts6(1, "battery_percent", "{subject=\"battery\"}");
+// Grafana client and transport
+HTTPClient httpLoki;
+HTTPClient httpGraphite;
 
 // Defs -----------------------------------------------------------------------
 
@@ -63,17 +54,25 @@ AirCondition measureAirCondition();
 ValPerc measureSoilMoisture();
 ValPercFloat measureBatteryVolt();
 
-void setupPrometheusClient();
+void setupWiFi();
+
+void sendToGraphite(unsigned long ts, AirCondition air, ValPerc soil, ValPercFloat battery);
+void sendToLoki(unsigned long ts, AirCondition air, ValPerc soil, ValPercFloat battery, String message);
 
 // Methods --------------------------------------------------------------------
 
 void setup()
 {
 
+#if DEBUG
   // Serial -------
   Serial.begin(115200);
   delay(10);
   Serial.println('\n');
+#endif
+
+  // Led ----------
+  pinMode(LED_BUILTIN, OUTPUT);
 
   // DHT20 --------
   Wire.begin();
@@ -89,82 +88,50 @@ void setup()
     }
   }
 
-  // Client -------
-  setupPrometheusClient();
+  // WiFi ---------
+  setupWiFi();
+  ntpClient.begin();
 }
 
 void loop()
 {
-  // TODO need to reconnect wifi?
+
+  // Reconnect to WiFi if required
+  if (WiFi.status() != WL_CONNECTED)
+  {
+    WiFi.disconnect();
+    yield();
+    setupWiFi();
+  }
+
+  digitalWrite(LED_BUILTIN, HIGH);
+
+  // Update time via NTP if required
+  while (!ntpClient.update())
+  {
+    yield();
+    ntpClient.forceUpdate();
+  }
 
   // Get current timestamp
-  int64_t time;
-  time = transport.getTimeMillis();
+  unsigned long ts = ntpClient.getEpochTime();
 
   // Read sensors
+  Serial.println("Collect data...");
   AirCondition air = measureAirCondition();
   ValPerc soil_moisture = measureSoilMoisture();
-  ValPercFloat batt = measureBatteryVolt();
-
-  // Add samples to time series
-
-  if (!ts1.addSample(time, air.temp))
-  {
-    Serial.println(ts1.errmsg);
-  }
-  if (!ts2.addSample(time, air.humidity))
-  {
-    Serial.println(ts2.errmsg);
-  }
-  if (!ts3.addSample(time, air.dew_point))
-  {
-    Serial.println(ts3.errmsg);
-  }
-  if (!ts4.addSample(time, soil_moisture.percentage))
-  {
-    Serial.println(ts4.errmsg);
-  }
-  if (!ts5.addSample(time, batt.raw))
-  {
-    Serial.println(ts5.errmsg);
-  }
-  if (!ts6.addSample(time, batt.percentage))
-  {
-    Serial.println(ts6.errmsg);
-  }
+  ValPercFloat battery = measureBatteryVolt();
 
   // Send
-  PromClient::SendResult res = client.send(req);
-  if (!res == PromClient::SendResult::SUCCESS)
-  {
-    Serial.println(client.errmsg);
-  }
-  else
-  {
-    Serial.println("Samples correctly sent to Prometheus!");
-  }
+  sendToGraphite(ts, air, soil_moisture, battery);
+  sendToLoki(ts, air, soil_moisture, battery, "New samples!");
 
-  // Reset batches after a succesful send.
-  ts1.resetSamples();
-  ts2.resetSamples();
-  ts3.resetSamples();
-  ts4.resetSamples();
-  ts5.resetSamples();
-  ts6.resetSamples();
+  digitalWrite(LED_BUILTIN, LOW);
 
-  // TODO remove
-  // Serial.println((String)air.temp + "°C");
-  // Serial.println((String)air.dew_point + "°C dew point");
-  // Serial.println((String)air.humidity + " %RH");
-  // Serial.println();
-  // Serial.println((String)soil_moisture.raw + " raw");
-  // Serial.println((String)soil_moisture.percentage + " %");
-  // Serial.println("Battery " + (String)batt.raw + "v");
-  // Serial.println("Battery " + (String)batt.percentage + " %");
-
-  // TODO put ESP in deep sleep
-
-  delay(10000);
+  // Put ESP in deep sleep
+  Serial.println("Go in deep sleep for " + String(SAMPLE_INTERVAL_SEC) + " sec");
+  ESP.deepSleep(SAMPLE_INTERVAL_SEC * 1000000);
+  // delay(SAMPLE_INTERVAL_SEC * 1000);
 }
 
 // Measures -------------------------------------------------------------------
@@ -226,62 +193,66 @@ ValPercFloat measureBatteryVolt()
   return res;
 }
 
-// Prometheus -----------------------------------------------------------------
+// Setup ----------------------------------------------------------------------
 
-void setupPrometheusClient()
+void setupWiFi()
 {
-  Serial.println("Setting up Prometheus client...");
+  Serial.print("Connecting to '");
+  Serial.print(WIFI_SSID);
+  Serial.print("' ...");
 
-  uint8_t serialTimeout;
-  while (!Serial && serialTimeout < 50)
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  while (WiFi.status() != WL_CONNECTED)
   {
-    delay(100);
-    serialTimeout++;
+    delay(500);
+    Serial.print(".");
   }
 
-  // Configure and start the transport layer
-  transport.setUseTls(true);
-  transport.setCerts(grafanaCert, strlen(grafanaCert));
-  transport.setWifiSsid(WIFI_SSID);
-  transport.setWifiPass(WIFI_PASSWORD);
-#if GC_DEBUG
-  transport.setDebug(Serial);
-#endif
-  if (!transport.begin())
-  {
-    Serial.println(transport.errmsg);
-    while (true)
-    {
-    };
-  }
+  Serial.println("connected");
+  Serial.print("IP address: ");
+  Serial.println(WiFi.localIP());
+}
 
-  // Configure the client
-  client.setUrl(GC_PROM_URL);
-  client.setPath((char *)GC_PROM_PATH);
-  client.setPort(GC_PORT);
-  client.setUser(GC_PROM_USER);
-  client.setPass(GC_PROM_PASS);
-#if GC_DEBUG
-  client.setDebug(Serial);
-#endif
-  if (!client.begin())
-  {
-    Serial.println(client.errmsg);
-    while (true)
-    {
-    };
-  }
+void sendToLoki(unsigned long ts, AirCondition air, ValPerc soil, ValPercFloat battery, String message)
+{
+  String lokiUrl = String("https://") + GC_LOKI_USER + ":" + GC_LOKI_PASS + "@" + GC_LOKI_URL + "/loki/api/v1/push";
+  String body = "{\"streams\": [{ \"stream\": { \"plant_id\": \"" + String(SENSOR_ID) + "\", \"monitoring_type\": \"plant\"}, \"values\": [ [ \"" + ts + "000000000\", \"" + "temperature=" + air.temp + " humidity=" + air.humidity + " dew_point=" + air.dew_point + " soil_moisture=" + soil.percentage + " battery_volts=" + battery.raw + " battery_perc=" + battery.percentage + " msg=\'" + message + "\'\" ] ] }]}";
 
-  // Add our TimeSeries to the WriteRequest
-  req.addTimeSeries(ts1);
-  req.addTimeSeries(ts2);
-  req.addTimeSeries(ts3);
-  req.addTimeSeries(ts4);
-  req.addTimeSeries(ts5);
-  req.addTimeSeries(ts6);
-#if GC_DEBUG
-  req.setDebug(Serial);
-#endif
+  std::unique_ptr<BearSSL::WiFiClientSecure> client(new BearSSL::WiFiClientSecure);
+  client->setInsecure();
+
+  // Submit POST request via HTTP
+  httpLoki.begin(*client, lokiUrl);
+  httpLoki.addHeader("Content-Type", "application/json");
+  int httpCode = httpLoki.POST(body);
+  Serial.printf("Loki [HTTPS] POST...  Code: %d\n", httpCode);
+  httpLoki.end();
+}
+
+void sendToGraphite(unsigned long ts, AirCondition air, ValPerc soil, ValPercFloat battery)
+{
+
+  // Build hosted metrics json payload
+  String body = String("[") +
+                "{\"name\":\"temperature\",\"interval\":" + SAMPLE_INTERVAL_SEC + ",\"value\":" + air.temp + ",\"mtype\":\"gauge\",\"time\":" + ts + "}," +
+                "{\"name\":\"humidity\",\"interval\":" + SAMPLE_INTERVAL_SEC + ",\"value\":" + air.humidity + ",\"mtype\":\"gauge\",\"time\":" + ts + "}," +
+                "{\"name\":\"dew_point\",\"interval\":" + SAMPLE_INTERVAL_SEC + ",\"value\":" + air.dew_point + ",\"mtype\":\"gauge\",\"time\":" + ts + "}," +
+                "{\"name\":\"soil_moisture\",\"interval\":" + SAMPLE_INTERVAL_SEC + ",\"value\":" + soil.percentage + ",\"mtype\":\"gauge\",\"time\":" + ts + "}," +
+                "{\"name\":\"battery_volts\",\"interval\":" + SAMPLE_INTERVAL_SEC + ",\"value\":" + battery.raw + ",\"mtype\":\"gauge\",\"time\":" + ts + "}," +
+                "{\"name\":\"battery_perc\",\"interval\":" + SAMPLE_INTERVAL_SEC + ",\"value\":" + battery.percentage + ",\"mtype\":\"gauge\",\"time\":" + ts + "}]";
+
+  std::unique_ptr<BearSSL::WiFiClientSecure> client(new BearSSL::WiFiClientSecure);
+  client->setInsecure();
+
+  // Submit POST request via HTTP
+  httpGraphite.begin(*client, String("https://") + GC_GRAPHITE_URL + "/graphite/metrics");
+  httpGraphite.setAuthorization(GC_GRAPHITE_USER, GC_GRAPHITE_PASS);
+  httpGraphite.addHeader("Content-Type", "application/json");
+
+  int httpCode = httpGraphite.POST(body);
+  Serial.printf("Graphite [HTTPS] POST...  Code: %d\n", httpCode);
+  httpGraphite.end();
 }
 
 // Utils ----------------------------------------------------------------------
