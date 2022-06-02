@@ -53,11 +53,13 @@ float mapFloat(float x, float in_min, float in_max, float out_min, float out_max
 AirCondition measureAirCondition();
 ValPerc measureSoilMoisture();
 ValPercFloat measureBatteryVolt();
+float measureSolarPanelVolt();
+bool evaluateSamples(AirCondition air, ValPerc soil, ValPercFloat battery, float solarPanelVolt);
 
 void setupWiFi();
 
-void sendToGraphite(unsigned long ts, AirCondition air, ValPerc soil, ValPercFloat battery);
-void sendToLoki(unsigned long ts, AirCondition air, ValPerc soil, ValPercFloat battery, String message);
+void sendToGraphite(unsigned long ts, AirCondition air, ValPerc soil, ValPercFloat battery, float solarPanelVolt);
+void sendToLoki(unsigned long ts, AirCondition air, ValPerc soil, ValPercFloat battery, float solarPanelVolt, String message);
 
 // Methods --------------------------------------------------------------------
 
@@ -72,7 +74,7 @@ void setup()
 #endif
 
   // Led ----------
-  pinMode(LED_BUILTIN, OUTPUT);
+  pinMode(STATUS_LED_PIN, OUTPUT);
 
   // DHT20 --------
   Wire.begin();
@@ -95,6 +97,7 @@ void setup()
 
 void loop()
 {
+  digitalWrite(STATUS_LED_PIN, HIGH);
 
   // Reconnect to WiFi if required
   if (WiFi.status() != WL_CONNECTED)
@@ -103,8 +106,6 @@ void loop()
     yield();
     setupWiFi();
   }
-
-  digitalWrite(LED_BUILTIN, HIGH);
 
   // Update time via NTP if required
   while (!ntpClient.update())
@@ -121,12 +122,17 @@ void loop()
   AirCondition air = measureAirCondition();
   ValPerc soil_moisture = measureSoilMoisture();
   ValPercFloat battery = measureBatteryVolt();
+  float solarPanelVolt = measureSolarPanelVolt();
 
-  // Send
-  sendToGraphite(ts, air, soil_moisture, battery);
-  sendToLoki(ts, air, soil_moisture, battery, "New samples!");
+  // Check if values are valid
+  if (evaluateSamples(air, soil_moisture, battery, solarPanelVolt))
+  {
+    // Send
+    sendToGraphite(ts, air, soil_moisture, battery, solarPanelVolt);
+    sendToLoki(ts, air, soil_moisture, battery, solarPanelVolt, "New_samples!");
+  }
 
-  digitalWrite(LED_BUILTIN, LOW);
+  digitalWrite(STATUS_LED_PIN, LOW);
 
   // Put ESP in deep sleep
   Serial.println("Go in deep sleep for " + String(SAMPLE_INTERVAL_SEC) + " sec");
@@ -193,6 +199,23 @@ ValPercFloat measureBatteryVolt()
   return res;
 }
 
+float measureSolarPanelVolt()
+{
+  int16_t raw = ads.readADC_SingleEnded(SOLAR_PANEL_VOLT_PIN);
+  float volt = ads.computeVolts(raw);
+  return volt;
+}
+
+bool evaluateSamples(AirCondition air, ValPerc soil, ValPercFloat battery, float solarPanelVolt)
+{
+  if (air.temp > 100 || air.humidity > 100 || air.dew_point > 100)
+  {
+    return false;
+  }
+
+  return true;
+}
+
 // Setup ----------------------------------------------------------------------
 
 void setupWiFi()
@@ -214,10 +237,10 @@ void setupWiFi()
   Serial.println(WiFi.localIP());
 }
 
-void sendToLoki(unsigned long ts, AirCondition air, ValPerc soil, ValPercFloat battery, String message)
+void sendToLoki(unsigned long ts, AirCondition air, ValPerc soil, ValPercFloat battery, float solarPanelVolt, String message)
 {
   String lokiUrl = String("https://") + GC_LOKI_USER + ":" + GC_LOKI_PASS + "@" + GC_LOKI_URL + "/loki/api/v1/push";
-  String body = "{\"streams\": [{ \"stream\": { \"plant_id\": \"" + String(SENSOR_ID) + "\", \"monitoring_type\": \"plant\"}, \"values\": [ [ \"" + ts + "000000000\", \"" + "temperature=" + air.temp + " humidity=" + air.humidity + " dew_point=" + air.dew_point + " soil_moisture=" + soil.percentage + " battery_volts=" + battery.raw + " battery_perc=" + battery.percentage + " msg=\'" + message + "\'\" ] ] }]}";
+  String body = "{\"streams\": [{ \"stream\": { \"plant_id\": \"" + String(SENSOR_ID) + "\", \"monitoring_type\": \"plant\"}, \"values\": [ [ \"" + ts + "000000000\", \"" + "temperature=" + air.temp + " humidity=" + air.humidity + " dew_point=" + air.dew_point + " soil_moisture=" + soil.percentage + " battery_volts=" + battery.raw + " battery_perc=" + battery.percentage + " solar_panel_volts=" + solarPanelVolt + " msg=\'" + message + "\'\" ] ] }]}";
 
   std::unique_ptr<BearSSL::WiFiClientSecure> client(new BearSSL::WiFiClientSecure);
   client->setInsecure();
@@ -230,7 +253,7 @@ void sendToLoki(unsigned long ts, AirCondition air, ValPerc soil, ValPercFloat b
   httpLoki.end();
 }
 
-void sendToGraphite(unsigned long ts, AirCondition air, ValPerc soil, ValPercFloat battery)
+void sendToGraphite(unsigned long ts, AirCondition air, ValPerc soil, ValPercFloat battery, float solarPanelVolt)
 {
 
   // Build hosted metrics json payload
@@ -240,7 +263,8 @@ void sendToGraphite(unsigned long ts, AirCondition air, ValPerc soil, ValPercFlo
                 "{\"name\":\"dew_point\",\"interval\":" + SAMPLE_INTERVAL_SEC + ",\"value\":" + air.dew_point + ",\"mtype\":\"gauge\",\"time\":" + ts + "}," +
                 "{\"name\":\"soil_moisture\",\"interval\":" + SAMPLE_INTERVAL_SEC + ",\"value\":" + soil.percentage + ",\"mtype\":\"gauge\",\"time\":" + ts + "}," +
                 "{\"name\":\"battery_volts\",\"interval\":" + SAMPLE_INTERVAL_SEC + ",\"value\":" + battery.raw + ",\"mtype\":\"gauge\",\"time\":" + ts + "}," +
-                "{\"name\":\"battery_perc\",\"interval\":" + SAMPLE_INTERVAL_SEC + ",\"value\":" + battery.percentage + ",\"mtype\":\"gauge\",\"time\":" + ts + "}]";
+                "{\"name\":\"battery_perc\",\"interval\":" + SAMPLE_INTERVAL_SEC + ",\"value\":" + battery.percentage + ",\"mtype\":\"gauge\",\"time\":" + ts + "}," +
+                "{\"name\":\"solar_panel_volts\",\"interval\":" + SAMPLE_INTERVAL_SEC + ",\"value\":" + solarPanelVolt + ",\"mtype\":\"gauge\",\"time\":" + ts + "}]";
 
   std::unique_ptr<BearSSL::WiFiClientSecure> client(new BearSSL::WiFiClientSecure);
   client->setInsecure();
