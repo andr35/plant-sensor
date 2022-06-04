@@ -1,4 +1,4 @@
-# Plant Sensor
+# Plant Sensor 🪴
 
 Program for ESP8266 that collect data from temperature, humidity and soil
 moisture sensors and send them to Grafana Cloud.
