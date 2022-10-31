@@ -16,6 +16,12 @@
 
 #include "config.h"
 
+#if ENABLE_DISPLAY
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+#endif
+
 // NTP Client
 WiFiUDP ntpUDP;
 NTPClient ntpClient(ntpUDP);
@@ -27,6 +33,11 @@ Adafruit_ADS1115 ads;
 // Grafana client and transport
 HTTPClient httpLoki;
 HTTPClient httpGraphite;
+
+#if ENABLE_DISPLAY
+#define OLED_RESET 0 // GPIO0
+Adafruit_SSD1306 display(OLED_RESET);
+#endif
 
 // Defs -----------------------------------------------------------------------
 
@@ -61,6 +72,9 @@ void setupWiFi();
 void sendToGraphite(unsigned long ts, AirCondition air, ValPerc soil, ValPercFloat battery, float solarPanelVolt);
 void sendToLoki(unsigned long ts, AirCondition air, ValPerc soil, ValPercFloat battery, float solarPanelVolt, String message);
 
+void printDisplayInfo(unsigned long ts, AirCondition air, ValPerc soil, ValPercFloat battery, float solarPanelVolt);
+void printDisplay(String text);
+
 // Methods --------------------------------------------------------------------
 
 void setup()
@@ -90,6 +104,13 @@ void setup()
     }
   }
 
+// Display ------
+#if ENABLE_DISPLAY
+  display.begin(SSD1306_SWITCHCAPVCC, 0x3C); // initialize with the I2C addr 0x3C (for the 64x48)
+  display.display();
+  printDisplay("Ciao!\n\nWiFi...");
+#endif
+
   // WiFi ---------
   setupWiFi();
   ntpClient.begin();
@@ -106,6 +127,10 @@ void loop()
     yield();
     setupWiFi();
   }
+
+#if ENABLE_DISPLAY
+  printDisplay("WiFi connected!");
+#endif
 
   // Update time via NTP if required
   while (!ntpClient.update())
@@ -133,6 +158,14 @@ void loop()
   }
 
   digitalWrite(STATUS_LED_PIN, LOW);
+
+// Print on display
+#if ENABLE_DISPLAY
+  printDisplayInfo(ts, air, soil_moisture, battery, solarPanelVolt);
+  delay(3 * 1000);
+  display.clearDisplay();
+  display.display();
+#endif
 
   // Put ESP in deep sleep
   Serial.println("Go in deep sleep for " + String(SAMPLE_INTERVAL_SEC) + " sec");
@@ -240,7 +273,7 @@ void setupWiFi()
 void sendToLoki(unsigned long ts, AirCondition air, ValPerc soil, ValPercFloat battery, float solarPanelVolt, String message)
 {
   String lokiUrl = String("https://") + GC_LOKI_USER + ":" + GC_LOKI_PASS + "@" + GC_LOKI_URL + "/loki/api/v1/push";
-  String body = "{\"streams\": [{ \"stream\": { \"plant_id\": \"" + String(SENSOR_ID) + "\", \"monitoring_type\": \"plant\"}, \"values\": [ [ \"" + ts + "000000000\", \"" + "temperature=" + air.temp + " humidity=" + air.humidity + " dew_point=" + air.dew_point + " soil_moisture=" + soil.percentage + " battery_volts=" + battery.raw + " battery_perc=" + battery.percentage + " solar_panel_volts=" + solarPanelVolt + " msg=\'" + message + "\'\" ] ] }]}";
+  String body = "{\"streams\": [{ \"stream\": { \"plant_id\": \"" + String(SENSOR_ID) + "\", \"monitoring_type\": \"plant\"}, \"values\": [ [ \"" + ts + "000000000\", \"" + "temperature=" + air.temp + " humidity=" + air.humidity + " dew_point=" + air.dew_point + " soil_moisture=" + soil.percentage + +" soil_moisture_raw=" + soil.raw + " battery_volts=" + battery.raw + " battery_perc=" + battery.percentage + " solar_panel_volts=" + solarPanelVolt + " msg=\'" + message + "\'\" ] ] }]}";
 
   std::unique_ptr<BearSSL::WiFiClientSecure> client(new BearSSL::WiFiClientSecure);
   client->setInsecure();
@@ -278,6 +311,49 @@ void sendToGraphite(unsigned long ts, AirCondition air, ValPerc soil, ValPercFlo
   Serial.printf("Graphite [HTTPS] POST...  Code: %d\n", httpCode);
   httpGraphite.end();
 }
+
+// Display --------------------------------------------------------------------
+
+#if ENABLE_DISPLAY
+
+void printDisplayInfo(unsigned long ts, AirCondition air, ValPerc soil, ValPercFloat battery, float solarPanelVolt)
+{
+  Serial.println("Print on display full info");
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(WHITE);
+  display.setCursor(0, 0);
+
+  display.printf("TEM  %.1f", air.temp);
+  display.println("C");
+  display.printf("HUM    %.0f", air.humidity);
+  display.println("%");
+  display.printf("SOIL   %i", soil.percentage);
+  display.println("%");
+  display.println("");
+  display.println("----------");
+  int hours = (ts / 60 / 60) % 24;
+  int min = (ts / 60) % 60;
+  String hoursStr = hours < 10 ? "0" + String(hours) : String(hours);
+  String minStr = min < 10 ? "0" + String(min) : String(min);
+  display.println("O    " + hoursStr + ":" + minStr);
+
+  display.display();
+}
+
+void printDisplay(String text)
+{
+  Serial.println("Print on display");
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(WHITE);
+  display.setCursor(0, 0);
+
+  display.print(text);
+
+  display.display();
+}
+#endif
 
 // Utils ----------------------------------------------------------------------
 

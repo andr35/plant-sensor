@@ -2,6 +2,7 @@
 #define WIFI_PASSWORD "wifi_password" // Add wifi passowrd
 
 #define DEBUG 1               // Enable/disable debug log lines
+#define ENABLE_DISPLAY 0      // Enable/disable the external display
 #define SENSOR_ID "plant"     // Add unique name for this sensor
 #define SAMPLE_INTERVAL_SEC 5 // Sample interval (i.e. the duration between ESP wake-ups)
 
