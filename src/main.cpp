@@ -16,10 +16,19 @@
 
 #include "config.h"
 
-#if ENABLE_DISPLAY
+#if ENABLE_DISPLAY_OLED
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
+#endif
+
+#if ENABLE_DISPLAY_EINK
+#include <GxEPD2_BW.h>
+#include <Fonts/Org_01.h>
+#include <Fonts/FreeMonoBold9pt7b.h>
+#include <Fonts/FreeMonoBold12pt7b.h>
+#include <Fonts/FreeMonoBold24pt7b.h>
+#include "eink_background.h"
 #endif
 
 // NTP Client
@@ -34,9 +43,14 @@ Adafruit_ADS1115 ads;
 HTTPClient httpLoki;
 HTTPClient httpGraphite;
 
-#if ENABLE_DISPLAY
+#if ENABLE_DISPLAY_OLED
 #define OLED_RESET 0 // GPIO0
 Adafruit_SSD1306 display(OLED_RESET);
+#endif
+
+#if ENABLE_DISPLAY_EINK
+// TODO set the correct pins
+GxEPD2_BW<GxEPD2_154, GxEPD2_154::HEIGHT> display(GxEPD2_154(/*CS=D8*/ SS, /*DC=D3*/ 0, /*RST=D4*/ 2, /*BUSY=D2*/ 4));
 #endif
 
 // Defs -----------------------------------------------------------------------
@@ -72,6 +86,7 @@ void setupWiFi();
 void sendToGraphite(unsigned long ts, AirCondition air, ValPerc soil, ValPercFloat battery, float solarPanelVolt);
 void sendToLoki(unsigned long ts, AirCondition air, ValPerc soil, ValPercFloat battery, float solarPanelVolt, String message);
 
+String getTimeString(unsigned long ts);
 void printDisplayInfo(unsigned long ts, AirCondition air, ValPerc soil, ValPercFloat battery, float solarPanelVolt);
 void printDisplay(String text);
 
@@ -105,10 +120,14 @@ void setup()
   }
 
 // Display ------
-#if ENABLE_DISPLAY
+#if ENABLE_DISPLAY_OLED
   display.begin(SSD1306_SWITCHCAPVCC, 0x3C); // initialize with the I2C addr 0x3C (for the 64x48)
   display.display();
   printDisplay("Ciao!\n\nWiFi...");
+#endif
+
+#if ENABLE_DISPLAY_EINK
+  display.init(DEBUG ? 115200 : 0);
 #endif
 
   // WiFi ---------
@@ -128,7 +147,7 @@ void loop()
     setupWiFi();
   }
 
-#if ENABLE_DISPLAY
+#if ENABLE_DISPLAY_OLED || ENABLE_DISPLAY_EINK
   printDisplay("WiFi connected!");
 #endif
 
@@ -160,11 +179,8 @@ void loop()
   digitalWrite(STATUS_LED_PIN, LOW);
 
 // Print on display
-#if ENABLE_DISPLAY
+#if ENABLE_DISPLAY_OLED || ENABLE_DISPLAY_EINK
   printDisplayInfo(ts, air, soil_moisture, battery, solarPanelVolt);
-  delay(3 * 1000);
-  display.clearDisplay();
-  display.display();
 #endif
 
   // Put ESP in deep sleep
@@ -314,7 +330,17 @@ void sendToGraphite(unsigned long ts, AirCondition air, ValPerc soil, ValPercFlo
 
 // Display --------------------------------------------------------------------
 
-#if ENABLE_DISPLAY
+String getTimeString(unsigned long ts)
+{
+  int hours = (ts / 60 / 60) % 24;
+  int min = (ts / 60) % 60;
+  String hoursStr = hours < 10 ? "0" + String(hours) : String(hours);
+  String minStr = min < 10 ? "0" + String(min) : String(min);
+
+  return hoursStr + ":" + minStr;
+}
+
+#if ENABLE_DISPLAY_OLED
 
 void printDisplayInfo(unsigned long ts, AirCondition air, ValPerc soil, ValPercFloat battery, float solarPanelVolt)
 {
@@ -332,12 +358,13 @@ void printDisplayInfo(unsigned long ts, AirCondition air, ValPerc soil, ValPercF
   display.println("%");
   display.println("");
   display.println("----------");
-  int hours = (ts / 60 / 60) % 24;
-  int min = (ts / 60) % 60;
-  String hoursStr = hours < 10 ? "0" + String(hours) : String(hours);
-  String minStr = min < 10 ? "0" + String(min) : String(min);
-  display.println("O    " + hoursStr + ":" + minStr);
+  display.println("O    " + getTimeString(ts));
 
+  display.display();
+
+  // Sleep after 3sec
+  delay(3 * 1000);
+  display.clearDisplay();
   display.display();
 }
 
@@ -352,6 +379,73 @@ void printDisplay(String text)
   display.print(text);
 
   display.display();
+}
+#endif
+
+#if ENABLE_DISPLAY_EINK
+
+void printTextOnDisplay(String text, uint16_t x, uint16_t y, const GFXfont *font, bool centerX, bool centerY)
+{
+  display.setFont(font);
+  display.setTextColor(GxEPD_BLACK);
+
+  int16_t tbx, tby;
+  uint16_t tbw, tbh;
+  display.getTextBounds(text, x, y, &tbx, &tby, &tbw, &tbh);
+  // Center wrt the given coord
+  uint16_t lx = centerX ? (x - (tbw / 2)) : x;
+  uint16_t ly = centerY ? y + (tbh / 2) : y;
+
+  display.setCursor(lx, ly);
+  display.print(text);
+}
+
+void printDisplayInfo(unsigned long ts, AirCondition air, ValPerc soil, ValPercFloat battery, float solarPanelVolt)
+{
+  Serial.println("Print on display full info");
+
+  display.setRotation(1);
+  display.setFullWindow();
+  display.firstPage();
+
+  do
+  {
+    display.fillScreen(GxEPD_BLACK);
+    // Draw background
+    display.drawBitmap(0, 0, EINK_BACKGROUND, display.epd2.WIDTH, display.epd2.HEIGHT, GxEPD_WHITE);
+
+    char buffer[10];
+    // Print current time
+    printTextOnDisplay(getTimeString(ts), display.height() / 2, 12, &FreeMonoBold9pt7b, true, false);
+    // Print soil moisture
+    sprintf(buffer, "%i%%", soil.percentage);
+    printTextOnDisplay(buffer, 80, 60, &FreeMonoBold24pt7b, false, true);
+    // Print air temperature
+    sprintf(buffer, "%.1fC", air.temp);
+    printTextOnDisplay(buffer, 30, 160, &FreeMonoBold12pt7b, false, true);
+    // Print air humidity
+    sprintf(buffer, "%.0f%%", air.humidity);
+    printTextOnDisplay(buffer, 145, 160, &FreeMonoBold12pt7b, false, true);
+    // Print next update time
+    printTextOnDisplay("Next at " + getTimeString(ts + SAMPLE_INTERVAL_SEC), display.height() / 2, display.width() - 2, &Org_01, true, false);
+
+  } while (display.nextPage());
+  display.hibernate();
+}
+
+void printDisplay(String text)
+{
+  Serial.println("Print on display");
+  display.setRotation(1);
+  display.setFullWindow();
+  display.firstPage();
+
+  do
+  {
+    display.fillScreen(GxEPD_BLACK);
+    printTextOnDisplay(text, display.width() / 2, display.height() / 2, &FreeMonoBold12pt7b, true, true);
+  } while (display.nextPage());
+  display.hibernate();
 }
 #endif
 
