@@ -11,7 +11,12 @@
 #define SOIL_MOISTURE_PIN 3    // Analog pin where soil moisture sensor is connected
 #define BATTERY_VOLT_PIN 0     // Analog pin to read battery voltage
 #define SOLAR_PANEL_VOLT_PIN 1 // Analog pin to read solar panel voltage
-#define STATUS_LED_PIN D7      // Digital pin used by the status led
+#define STATUS_LED_PIN A0      // Digital pin used by the status led
+
+// E-Ink Display
+#define EINK_BUSY_PIN D6  // E-Ink display Busy pin
+#define EINK_RESET_PIN D4 // E-Ink display Reset pin
+#define EINK_DC_PIN D3    // E-Ink display D/C pin
 
 // Sensors const
 #define BATTERY_MIN_VOLTS 2.8 // Minimum battery voltage level

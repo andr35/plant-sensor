@@ -49,8 +49,11 @@ Adafruit_SSD1306 display(OLED_RESET);
 #endif
 
 #if ENABLE_DISPLAY_EINK
-// TODO set the correct pins
-GxEPD2_BW<GxEPD2_154, GxEPD2_154::HEIGHT> display(GxEPD2_154(/*CS=D8*/ SS, /*DC=D3*/ 0, /*RST=D4*/ 2, /*BUSY=D2*/ 4));
+GxEPD2_BW<GxEPD2_154, GxEPD2_154::HEIGHT> display(GxEPD2_154(
+    SS,
+    EINK_DC_PIN,
+    EINK_RESET_PIN,
+    EINK_BUSY_PIN));
 #endif
 
 // Defs -----------------------------------------------------------------------
