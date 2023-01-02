@@ -445,10 +445,10 @@ void printDisplay(String text)
 
   do
   {
-    display.fillScreen(GxEPD_BLACK);
+    display.fillScreen(GxEPD_WHITE);
     printTextOnDisplay(text, display.width() / 2, display.height() / 2, &FreeMonoBold12pt7b, true, true);
   } while (display.nextPage());
-  display.hibernate();
+  // display.hibernate();
 }
 #endif
 
